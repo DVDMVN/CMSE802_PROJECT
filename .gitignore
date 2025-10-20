@@ -3,6 +3,7 @@ __pycache__/
 *.py[codz]
 *$py.class
 data
+DVDMAN_ARCHIVE.ipynb
 
 # C extensions
 *.so
