@@ -1,0 +1,26 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "ROOT"
+version = "0.01"
+description = "Kickstarter Crowdfunding Project"
+readme = "README.md"
+requires-python = "==3.13.5"
+authors = [{ name = "DVDMAN" }]
+
+dependencies = [
+  "pyarrow",
+  "pandas",
+  "numpy",
+  "seaborn",
+  "matplotlib",
+  "ipykernel",
+  "ipywidgets",
+  "lxml",
+  "requests>=2.32.5",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]
