@@ -1,12 +1,11 @@
 # **Predicting Kickstarter Success from Launch Information**
 
-Utilizing past Kickstarter project data to predict project success or failure using launch information features such as topic, category, description, fundraising goal, and timeframe. Our goal is to see whether we can build accurate predictive models and identify the key factor that influence outcomes to provide data-driven insights to future creators on the platform looking to optimize their campaign strategies.
+This project leverages historical Kickstarter campaign data to predict whether a project will succeed or fail based on launch-time information such as topic, category, description, funding goal, and campaign duration. Beyond building accurate models, we aim to understand how predictive patterns vary across creative domains and whether specialized models outperform general ones. The overarching goal is to generate interpretable, data-driven recommendations that help creators optimize their campaign strategies.
 
 ### Objectives
 
-1. Development of accurate models to predict campaign outcomes.
-2. Extraction of actionable, data-driven insights for creators to utilize as recommendation.
-3. Evaluate the role of multi-modal data in making better predictions.
+1. Compare general vs. category-specific models to evaluate whether predictors of success differ meaningfully across creative domain
+2. Identify key success factors within each domain to provide actionable insights for creators.
 
 ### Folder structure
 
