@@ -1,3 +1,14 @@
+"""
+Download and extract the Kickstarter dataset.
+
+Run this module directly to:
+1. Download the raw dataset zip from DATA_LINK
+2. Extract it under DATA_PATH
+
+Author: Alex (Ze) Chen
+Date: 2025-10-24
+"""
+
 import os
 import requests
 from zipfile import ZipFile
@@ -7,6 +18,17 @@ import tempfile
 from src.config import DATA_PATH, DATA_LINK
 
 def download_and_extract_raw_data():
+    """
+    Download the raw Kickstarter zip and extract its contents.
+
+    If the target directory already exists, this function does nothing.
+
+    Returns
+    -------
+    list[pathlib.Path] or None
+        List of extracted file paths if a download happened.
+        Returns None if DATA_PATH already existed.
+    """
     output_dir = Path(DATA_PATH)
     if os.path.exists(DATA_PATH):
         print("DATA ALREADY EXISTS")

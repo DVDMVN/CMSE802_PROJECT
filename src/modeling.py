@@ -1,3 +1,18 @@
+"""
+Final machine-learning pipeline:
+- last-step preprocessing for modeling (encoding/scaling)
+- train/test split
+- baseline and RandomForest models
+- per-category specialist models
+- evaluation and CSV export of results
+
+Run this file directly to train and evaluate models and
+write accuracy results into the `results/` folder.
+
+Author: Alex (Ze) Chen
+Date: 2025-10-24
+"""
+
 import numpy as np
 import pandas as pd
 from src.utils import load_processed_data
@@ -11,6 +26,21 @@ from pathlib import Path
 # ---------------------------------------------------------------
 
 def drop_final_irrelevant_columns_and_encode_target(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Remove human-only columns and create binary target is_successful.
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        Preprocessed Kickstarter data with 'state' column.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Copy of df with text/meta columns dropped and new boolean
+        column 'is_successful'. Original 'state' column is removed.
+    """
+        
     # These are useful for lookup / human insight, but not for machine learning
     df = df.copy()
     irrelevant_columns = [
@@ -26,6 +56,24 @@ def drop_final_irrelevant_columns_and_encode_target(df: pd.DataFrame) -> pd.Data
     return df
 
 def handle_datetime_features(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Derive time-based features and drop raw timestamps.
+
+    Currently:
+    - age_days : days since campaign launch
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        Data containing 'created_at', 'deadline', 'launched_at'
+        as datetime columns.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Copy with derived features added and original timestamp
+        columns removed.
+    """
     datetime_columns = [
         "created_at",
         "deadline",
@@ -40,6 +88,36 @@ def handle_datetime_features(df: pd.DataFrame) -> pd.DataFrame:
 def machine_ready_preprocessing(
     df: pd.DataFrame, testing=False, cat_encoders = {}, num_scaler=None
 ) -> tuple[pd.DataFrame, LabelEncoder, StandardScaler]:
+    """
+    Prepare features for modeling:
+    - derive time features / drop timestamps
+    - drop unused columns and encode target
+    - label-encode categoricals
+    - standard-scale numerics
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        Output of earlier preprocessing (categoricals still strings,
+        numericals unscaled).
+    testing : bool, default=False
+        If False, fit new encoders/scaler on df.
+        If True, assume encoders/scaler are provided and reuse them.
+    cat_encoders : dict, default={}
+        Maps column name -> fitted LabelEncoder.
+        Filled on training; reused on testing.
+    num_scaler : StandardScaler or None
+        Fitted scaler for numeric columns.
+
+    Returns
+    -------
+    df_out : pandas.DataFrame
+        Encoded and scaled features (including 'is_successful').
+    cat_encoders : dict
+        Updated mapping of categorical col -> LabelEncoder.
+    num_scaler : StandardScaler
+        Fitted scaler for numeric columns.
+    """
     df = handle_datetime_features(df)
     df = drop_final_irrelevant_columns_and_encode_target(df)
     # Training set will fit the encoders / scalers, the test set will use the fitted encoders / scalers
@@ -70,6 +148,21 @@ def machine_ready_preprocessing(
 
 
 def perform_train_test_split(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, pd.Series, pd.Series]:
+    """
+    Split the dataset into train/test sets.
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        Fully transformed dataset containing 'is_successful'.
+
+    Returns
+    -------
+    X_train, X_test : pandas.DataFrame
+        Feature matrices with 'is_successful' removed.
+    y_train, y_test : pandas.Series
+        Target labels (True=successful, False=failed).
+    """
     X = df.drop(columns = ['is_successful'])
     y = df['is_successful']
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size = 0.25, random_state = 1)
@@ -83,6 +176,16 @@ def perform_train_test_split(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFra
 ### ----- ----- ----- ----- BASELINE ----- ----- ----- -----
 
 def model_naive_baseline(X_train, X_test, y_train, y_test):
+    """
+    Majority-class baseline.
+
+    Predict the most common class in y_train for all test rows.
+
+    Returns
+    -------
+    float
+        Accuracy on the test set.
+    """
     majority_class = y_train.value_counts().sort_values(ascending = False).keys()[0]
     predictions = np.full_like(y_test, majority_class)
 
@@ -94,6 +197,14 @@ def model_naive_baseline(X_train, X_test, y_train, y_test):
 ### ----- ----- ----- ----- GENERAL RF MODEL ----- ----- ----- -----
 
 def model_general_rf(X_train, X_test, y_train, y_test):
+    """
+    Train a single RandomForest model on all categories at once.
+
+    Returns
+    -------
+    float
+        Accuracy on the test set.
+    """
     rf = RandomForestClassifier()
     rf.fit(X_train, y_train)
     predictions = rf.predict(X_test)
@@ -104,6 +215,21 @@ def model_general_rf(X_train, X_test, y_train, y_test):
 ### ----- ----- ----- ----- CATEGORY SPECIFIC RF MODEL ----- ----- ----- -----
 
 def model_category_specific_rf(X_train, X_test, y_train, y_test):
+    """
+    Train one RandomForest per parent category.
+
+    For each unique encoded value of 'cat_parent_name':
+    - train a model only on that subset
+    - evaluate only on that subset in X_test
+    - report accuracy
+
+    Returns
+    -------
+    rf_models : dict[int, RandomForestClassifier]
+        Mapping category_value -> fitted model.
+    accuracies : dict[int, float]
+        Mapping category_value -> accuracy for that category.
+    """
     rf_models = {} # trained model per category
     accuracies = {} # model accuracy per category
 
@@ -143,6 +269,28 @@ def model_category_specific_rf(X_train, X_test, y_train, y_test):
     return rf_models, accuracies
 
 def weighted_accuracy_of_category_specific_rf(rf_models, X_test, y_test):
+    """
+    Compute overall accuracy across all category-specific models.
+
+    For each category model:
+    - collect its predictions on its own category rows
+    - concatenate all predictions and truths
+    - take global accuracy
+
+    Parameters
+    ----------
+    rf_models : dict
+        Output of model_category_specific_rf.
+    X_test : pandas.DataFrame
+        Test features (contains 'cat_parent_name').
+    y_test : pandas.Series
+        Test labels.
+
+    Returns
+    -------
+    float
+        Weighted/overall accuracy across all categories.
+    """
     all_preds = []
     all_trues = []
 

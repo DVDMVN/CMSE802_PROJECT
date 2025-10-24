@@ -1,3 +1,19 @@
+"""
+Full preprocessing / feature engineering pipeline for Kickstarter data.
+
+This module:
+- handles duplicates & missingness
+- removes leakage columns
+- engineers text, category, and time-based features
+- writes a final parquet output
+
+Run this file directly to read raw CSVs, preprocess them, and save
+the processed parquet to disk.
+
+Author: Alex (Ze) Chen
+Date: 2025-10-24
+"""
+
 import pandas as pd
 from src.utils import parse_json_feature, load_raw_data
 import json
@@ -10,6 +26,24 @@ import re
 ### ----- ----- ----- ----- DEDUPLICATION ----- ----- ----- -----
 
 def apply_deduplication_steps(kickstarter) -> pd.DataFrame:
+    """
+    Remove duplicate projects and keep the "best" row per project ID.
+
+    Strategy:
+    1. Drop exact duplicate rows
+    2. For rows with the same 'id', keep the one with the highest
+       backers_count (assumes that represents the final/most supported version)
+
+    Parameters
+    ----------
+    kickstarter : pandas.DataFrame
+        Raw concatenated data.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Deduplicated dataframe with a single row per project id.
+    """
     kick_nodup = kickstarter.copy()
 
     # Eliminate true duplicates
@@ -27,16 +61,32 @@ def apply_deduplication_steps(kickstarter) -> pd.DataFrame:
 ### ----- ----- ----- ----- MISSINGNESS ----- ----- ----- -----
 
 def impute_blurb(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Fill missing 'blurb' using 'name'.
+    """
     df = df.copy()
     df['blurb'] = df['blurb'].fillna(df['name'])
     return df
 
 def impute_usd_type(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Fill missing 'usd_type' with the mode.
+    """
     df = df.copy()
     df["usd_type"] = df["usd_type"].fillna(df["usd_type"].mode()[0])
     return df
 
 def impute_location(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Expand the 'location' JSON into columns and impute missing
+    location fields using the most common value per country.
+
+    Returns
+    -------
+    pandas.DataFrame
+        DataFrame with 'loc_name', 'loc_state', 'loc_type' added,
+        and original 'location' column removed.
+    """
     def parse_json_feature(raw):
         return json.loads(raw)
     locations_not_null = df[df['location'].notnull()]['location'].apply(parse_json_feature)
@@ -76,6 +126,10 @@ def impute_location(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def impute_money_features(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Fill missing monetary/currency-related fields using relationships
+    between pledged amounts and exchange rates.
+    """
     # Impute usd_pledged
     df['usd_pledged'] = df['usd_pledged'].fillna(df['pledged'] * df['static_usd_rate'])
 
@@ -89,15 +143,24 @@ def impute_money_features(df: pd.DataFrame) -> pd.DataFrame:
 
 # This is transformation rather than imputation, but for our purpose, it is transformation in service to imputate
 def impute_video(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Derive 'has_video' boolean and drop raw 'video' blob-like field.
+    """
     df['has_video'] = df['video'].notnull()
     df = df.drop(columns = ['video'])
     return df
 
 def impute_is_in_post_campaign_pledging_phase(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Drop 'is_in_post_campaign_pledging_phase' (not needed).
+    """
     df = df.drop(columns = ['is_in_post_campaign_pledging_phase'])
     return df
 
 def apply_missingness_handling(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Run all imputation / cleanup steps for missing data.
+    """
     df = impute_blurb(df)
     df = impute_usd_type(df)
     df = impute_location(df)
@@ -112,10 +175,16 @@ def apply_missingness_handling(df: pd.DataFrame) -> pd.DataFrame:
 # ------------------------------------------------------------------------------------------------------------------------------
 
 def keep_only_final_outcome_states(df: pd.DataFrame):
+    """
+    Keep only rows where final state is 'successful' or 'failed'.
+    """
     df = df[df['state'].isin(['successful', 'failed'])].copy()
     return df
 
 def drop_leakage_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Drop columns that leak final outcome (pledged dollars, backers, etc).
+    """
     leakage_columns = [
         "backers_count",
         "pledged",
@@ -132,6 +201,9 @@ def drop_leakage_columns(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 def drop_irrelevant_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Drop metadata / UI columns not useful for prediction.
+    """
     irrelevant_columns = [
         "id",
         "slug",
@@ -150,18 +222,33 @@ def drop_irrelevant_columns(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 def drop_photo(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Remove 'photo' (image metadata structure).
+    """
     df = df.drop(columns = ['photo'])
     return df
 
 def drop_creator(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Remove 'creator' (nested JSON-like blob).
+    """
     df = df.drop(columns = ['creator']).copy()
     return df
 
 def drop_profile(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Remove 'profile' (not predictive / often sparse).
+    """
     df = df.drop(columns = ['profile'])
     return df
 
 def apply_data_filtering_steps(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Apply all final filtering steps:
+    - keep only success/fail
+    - remove leakage columns
+    - drop noisy metadata blobs
+    """
     df = keep_only_final_outcome_states(df)
     df = drop_leakage_columns(df)
     df = drop_irrelevant_columns(df)
@@ -175,6 +262,9 @@ def apply_data_filtering_steps(df: pd.DataFrame) -> pd.DataFrame:
 # ---------------------------------------------------------------
 
 def extract_categories(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Parse the nested 'category' JSON into flat columns.
+    """
     categories = df['category'].apply(parse_json_feature)
     df['cat_name'] = categories.apply(lambda x: x.get('name'))
     df['cat_position'] = categories.apply(lambda x: x.get('position'))
@@ -183,14 +273,23 @@ def extract_categories(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 def get_words(text: str) -> list[str]:
+    """
+    Tokenize text into alphanumeric 'words', lowercase.
+    """
     words = re.findall(r"\b\w+\b", text.lower()) # Ignores punctuation
     return words
 
 def get_avg_word_len(text: str) -> float:
+    """
+    Average word length in a text string.
+    """
     words = get_words(text)
     return (sum(w.__len__() for w in words) / words.__len__()) if words else 0.0
 
 def engineer_text_features(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Create basic length / word-length features from name/blurb.
+    """
     df['blurb_len'] = df['blurb'].apply(lambda x: x.strip().__len__())
     df['name_len'] = df['name'].apply(lambda x: x.strip().__len__())
     df['blurb_avg_word_len'] = df['blurb'].apply(get_avg_word_len)
@@ -198,16 +297,29 @@ def engineer_text_features(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 def convert_timestamp_features(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Convert raw Unix timestamps to pandas datetime.
+    """
     df['created_at'] = pd.to_datetime(df['created_at'], unit='s')
     df['deadline'] = pd.to_datetime(df['deadline'], unit='s')
     df['launched_at'] = pd.to_datetime(df['launched_at'], unit='s')
     return df
 
 def engineer_duration(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Add campaign duration (days between launch and deadline).
+    """
     df['duration'] = (df['deadline'] - df['launched_at']).dt.days
     return df
 
 def apply_feature_engineering(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Run all feature engineering in sequence:
+    - categories
+    - text stats
+    - timestamp conversion
+    - duration
+    """
     df = extract_categories(df)
     df = engineer_text_features(df)
     df = convert_timestamp_features(df)
@@ -219,6 +331,9 @@ def apply_feature_engineering(df: pd.DataFrame) -> pd.DataFrame:
 # ---------------------------------------------------------------
 
 def drop_additional_irrelevant_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Drop leftover columns judged unhelpful after EDA.
+    """
     irrelevant_cols = [
         'disable_communication',
         'is_launched'
@@ -227,6 +342,9 @@ def drop_additional_irrelevant_columns(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 def apply_additional_preprocessing(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Wrapper for final cleanup after EDA review.
+    """
     df = drop_additional_irrelevant_columns(df)
     return df
 
@@ -237,6 +355,28 @@ def apply_additional_preprocessing(df: pd.DataFrame) -> pd.DataFrame:
 from src.config import PROCESSED_DATA_PATH
 
 def apply_preprocessing(df: pd.DataFrame, verbose = True) -> pd.DataFrame:
+    """
+    Full preprocessing driver.
+
+    Steps (in order):
+    1. Deduplicate projects
+    2. Impute/fix missing values
+    3. Filter out leakage and unused metadata
+    4. Engineer features (text stats, categories, durations, timestamps)
+    5. Drop final irrelevant cols from EDA
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        Raw concatenated Kickstarter data.
+    verbose : bool, default=True
+        If True, print step info and shapes.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Final cleaned/engineered dataset, ready for modeling.
+    """
     print("Starting shape: ", df.shape)
     if verbose: print("\tApplying deduplication handling...")
     df = apply_deduplication_steps(df)
@@ -258,6 +398,9 @@ def apply_preprocessing(df: pd.DataFrame, verbose = True) -> pd.DataFrame:
     return df
 
 def save_post_processing(df: pd.DataFrame) -> None:
+    """
+    Save the final processed dataframe to disk as parquet.
+    """
     df.to_parquet(PROCESSED_DATA_PATH, index = False)
 
 if __name__ == '__main__':
