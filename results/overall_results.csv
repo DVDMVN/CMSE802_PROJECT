@@ -1,0 +1,4 @@
+model,accuracy
+Majority Class Baseline,0.6213431423162967
+Random Forest (General),0.8150060230597144
+"Random Forest (Category specific, weighted overall)",0.8319996558251592
