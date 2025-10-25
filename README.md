@@ -38,8 +38,7 @@ This project leverages historical Kickstarter campaign data to predict whether a
     - pip install -r requirements.txt
 - After `uv sync` either continue by using `uv run <file_path>` or activate the virtual environment in the traditional way by running `.venv/bin/activate` and continue by using `python <file_path>`.
 
-4. Run `download_data.py` via CLI to download the kickstarter datasets. Warning, this will be very large, and time consuming.
-
-5. Run `preprocessing.py` via CLI to read raw CSVs, preprocess them, and save a processed parquet to `data/processed`.
-
-6. Run `modeling.py` via CLI to train and evaluate models and write accuracy results into the `results/` folder.
+3. Run `src/*.py` files to run parts of the Machine Learning pipeline:
+    - Run `download_data.py` via CLI to download the kickstarter datasets. Warning, this will be very large, and time consuming.
+    - Run `preprocessing.py` via CLI to read raw CSVs, preprocess them, and save a processed parquet to `data/processed`.
+    - Run `modeling.py` via CLI to train and evaluate models and write accuracy results into the `results/` folder.
