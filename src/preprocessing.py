@@ -18,6 +18,7 @@ import pandas as pd
 from src.utils import parse_json_feature, load_raw_data
 import json
 import re
+from pathlib import Path
 
 # ---------------------------------------------------------------
 #               DATA INTEGRITY ANALYSIS FUNCTIONS
@@ -272,6 +273,14 @@ def extract_categories(df: pd.DataFrame) -> pd.DataFrame:
     df = df.drop(columns = ['category'])
     return df
 
+def fill_missing_extracted_parent_categories(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Some projects do not have a parent category name. Imputing for this 
+    newly introduced feature with "None"
+    """
+    df['cat_parent_name'] = df['cat_parent_name'].fillna("None")
+    return df
+
 def get_words(text: str) -> list[str]:
     """
     Tokenize text into alphanumeric 'words', lowercase.
@@ -321,6 +330,7 @@ def apply_feature_engineering(df: pd.DataFrame) -> pd.DataFrame:
     - duration
     """
     df = extract_categories(df)
+    df = fill_missing_extracted_parent_categories(df)
     df = engineer_text_features(df)
     df = convert_timestamp_features(df)
     df = engineer_duration(df)
@@ -401,7 +411,9 @@ def save_post_processing(df: pd.DataFrame) -> None:
     """
     Save the final processed dataframe to disk as parquet.
     """
-    df.to_parquet(PROCESSED_DATA_PATH, index = False)
+    output_path = Path(PROCESSED_DATA_PATH)      # full file path: e.g. data/processed/post_processing_kick.parquet
+    output_path.parent.mkdir(parents=True, exist_ok=True)  # ensure data/processed exists
+    df.to_parquet(output_path, index=False)
 
 if __name__ == '__main__':
     print("LOADING DATA...")
