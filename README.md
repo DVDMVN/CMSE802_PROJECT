@@ -19,7 +19,7 @@ This project leverages historical Kickstarter campaign data to predict whether a
     - 📄 `utils.py` – Helper functions for usage across many files.
 - 📁 `results`: Stores the generated results from experimentation.
     - 📁 `figures` – Generated plots and visualizations.
-    - 📁 `models` – Serialized trained models for checkpointing.
+    - 📁 `optimization_trials` – hyperparameter trialing history to extract and retain best parameters for each model.
 - 📁 `reports`: Folder for presentation slide-decks or report write-ups.
 - 📄 `.gitignore`: Git tracking configuration.
 - 📄 `README.md`: Project description.
@@ -39,6 +39,11 @@ This project leverages historical Kickstarter campaign data to predict whether a
 - After `uv sync` either continue by using `uv run <file_path>` or activate the virtual environment in the traditional way by running `.venv/bin/activate` and continue by using `python <file_path>`.
 
 3. Run `src/*.py` files to run parts of the Machine Learning pipeline:
-    - Run `download_data.py` via CLI to download the kickstarter datasets. Warning, this will be very large, and time consuming.
-    - Run `preprocessing.py` via CLI to read raw CSVs, preprocess them, and save a processed parquet to `data/processed`.
-    - Run `modeling.py` via CLI to train and evaluate models and write accuracy results into the `results/` folder.
+    - Run `download_data.py` via CLI to download the kickstarter datasets. This will write to `data/raw/`. Warning, this will be very large, and time consuming.
+    - Run `preprocessing.py` via CLI to read raw CSVs, preprocess them, and save a processed parquet to `data/processed/`.
+    - Run `modeling.py` or `modeling.py default` via CLI to train and evaluate base models. Results will be saved to `results/`
+    - Run `optimization.py` via CLI to perform hyperparameter optimization for various models. Results will be saved to `results/optimization_trials/`. Warning, this may take a long computation time (roughly 15 - 30 minutes).
+    - Run `modeling.py evaluate_optimized` via CLI to evaluate optimized models using best hyperparameters found during optimization. Results will be saved to `results/`. This requires previously running `optimization.py` to attain best hyperparameters.
+        - The results include overall and category specific performance metrics on the best tuned XGBoost model and ensemble of tuned category specific XGBoost models.
+
+To reproduce the full analysis, run the files in the order specified above.
