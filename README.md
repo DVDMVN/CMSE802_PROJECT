@@ -10,17 +10,17 @@ This project leverages historical Kickstarter campaign data to predict whether a
 ### Folder structure
 
 - 📁 `data/raw`, `data/processed`: folders for holding both the raw and post processing versions of the dataset. Since the dataset is so massive, these will be populated locally only via `src/download_data.py`
-- 📁 `notebooks`: folder for holding exploratory notebooks for IDA and EDA. For a comprehensive overview of decision making, insights, and results, see these notebook(s).
+- 📁 `notebooks`: folder for holding exploratory notebook for full data science process. From preprocessing, IDA, EDA to modeling and optimization. For a comprehensive overview of decision making, insights, and results, see this notebook.
 - 📁 `src`: folder for holding all main pipeline stages and finalized methods for training, testing, and evaluating models, as well as producing results and figures.
     - 📄 `config.py` - Holds project wide configuration and paths
     - 📄 `download_data.py` - Script to fetch and organize the Webrobots Kickstarter dumps into `data/raw`
     - 📄 `preprocessing.py` – Script for cleaning, merging, feature engineering, etc. and saving processed datasets into `data/processed`.
     - 📄 `modeling.py` – Script for running the final machine learning pipeline. Results are saved in the results folder.
     - 📄 `utils.py` – Helper functions for usage across many files.
-- 📁 `results`: Stores the generated results from experimentation.
+- 📁 `results`: Stores the generated results from experimentation. Main results will be contained within this folder level.
     - 📁 `figures` – Generated plots and visualizations.
     - 📁 `optimization_trials` – hyperparameter trialing history to extract and retain best parameters for each model.
-- 📁 `reports`: Folder for presentation slide-decks or report write-ups.
+- 📁 `reports`: Folder for presentation slide-deck(s) or written report write-ups.
 - 📄 `.gitignore`: Git tracking configuration.
 - 📄 `README.md`: Project description.
 - ⚙️ `pyproject.toml`: Python project configuration file, includes the list of all python dependencies.
