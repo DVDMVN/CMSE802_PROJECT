@@ -1,11 +1,11 @@
 # **Predicting Kickstarter Success from Launch Information**
 
-This project leverages historical Kickstarter campaign data to predict whether a project will succeed or fail based on launch-time information such as topic, category, description, funding goal, and campaign duration. Beyond building accurate models, we aim to understand how predictive patterns vary across creative domains and whether specialized models outperform general ones. The overarching goal is to generate interpretable, data-driven recommendations that help creators optimize their campaign strategies.
+This project seeks to investigate whether certain Kickstarter categories have systematic advantages in getting funded, and whether category-specific models outperform a general category-agnostic model. By comparing these approaches, we can determine if the predictive signals of success are universal across categories or if each category requires tailored modeling to capture its unique funding dynamics.
 
 ### Objectives
 
-1. Compare general vs. category-specific models to evaluate whether predictors of success differ meaningfully across creative domain
-2. Identify key success factors within each domain to provide actionable insights for creators.
+1. Do different categories of Kickstarter campaigns have different predictive patterns for success?
+2. Are models trained within specific categories more predictive within their category than models that are trained generally?
 
 ### Folder structure
 
