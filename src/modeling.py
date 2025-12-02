@@ -20,8 +20,8 @@ Date: 2025-10-24
 import pandas as pd
 import numpy as np
 
-from sklearn.model_selection import StratifiedKFold
-from sklearn.preprocessing import StandardScaler, OneHotEncoder, LabelEncoder
+from sklearn.model_selection import StratifiedKFold, train_test_split
+from sklearn.preprocessing import StandardScaler, OneHotEncoder
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
@@ -30,6 +30,12 @@ from xgboost import XGBClassifier
 from pathlib import Path
 
 from src.utils import load_processed_data
+
+# ====================================
+#               CONFIG
+# ====================================
+K_splits = 5
+RANDOM_STATE = 1337
 
 # ---------------------------------------------------------------
 #              MACHINE READY PREPROCESSING FUNCTIONS
@@ -95,9 +101,12 @@ def handle_datetime_features(df: pd.DataFrame) -> pd.DataFrame:
     df = df.drop(columns = datetime_columns)
     return df
 
-def machine_ready_preprocessing(
-    df: pd.DataFrame
-) -> tuple[pd.DataFrame, LabelEncoder, StandardScaler]:
+def handle_types(df: pd.DataFrame) -> pd.DataFrame:
+    numerical_cols = df.select_dtypes(include=["number"]).columns
+    df[numerical_cols] = df[numerical_cols].astype("float64")
+    return df
+
+def machine_ready_preprocessing(df: pd.DataFrame)-> pd.DataFrame:
     """
     Apply final preprocessing steps required before modeling.
 
@@ -120,38 +129,10 @@ def machine_ready_preprocessing(
     """
     df = handle_datetime_features(df)
     df = drop_final_irrelevant_columns_and_encode_target(df)
+    df = handle_types(df)
     return df
 
 def preprocess_data(X_train, X_test, categorical_cols, numerical_cols):
-    """
-    Encode categorical features and scale numerical features for a train/test split.
-
-    For each categorical column:
-    - If the column has < 100 unique values, apply one-hot encoding.
-    - Otherwise, apply frequency encoding, mapping categories to their
-      relative frequency in the training set (unseen values in the test
-      set are assigned a small "rare" frequency).
-
-    Numerical columns are standardized using :class:`StandardScaler`
-    fitted on the training data and then applied to both train and test.
-
-    Parameters
-    ----------
-    X_train : pandas.DataFrame
-        Training feature matrix.
-    X_test : pandas.DataFrame
-        Test feature matrix.
-    categorical_cols : iterable of str
-        Names of columns to treat as categorical.
-    numerical_cols : iterable of str
-        Names of columns to treat as numerical and scale.
-
-    Returns
-    -------
-    (pandas.DataFrame, pandas.DataFrame)
-        Tuple of (X_train_processed, X_test_processed) with encoded
-        categorical columns and scaled numerical columns.
-    """
     # Training set will fit the encoders / scalers, the test set will use the fitted encoders / scalers
     # ====================================
     #        CATEGORICAL ENCODING
@@ -199,71 +180,31 @@ def preprocess_data(X_train, X_test, categorical_cols, numerical_cols):
 
     return X_train, X_test
 
+# ---------------------------------------------------------------
+#            MODEL TRAINING & EVALUATION FUNCTIONS
+# ---------------------------------------------------------------
+
 def perform_CV(
         data: pd.DataFrame, 
         model_class, 
         model_params, 
         verbose = False
     ) -> list[dict[str, float]]:
-    """
-    Run stratified K-fold cross-validation for a given model class.
-
-    The function:
-    - splits the data into K stratified folds
-    - applies preprocessing (categorical encoding + numerical scaling)
-      separately within each fold via :func:`preprocess_data`
-    - trains the specified model on each training fold
-    - evaluates on the corresponding validation fold using accuracy,
-      precision, recall, and F1 score.
-
-    Parameters
-    ----------
-    data : pandas.DataFrame
-        Preprocessed dataset including an `is_successful` target column.
-    model_class : callable
-        Class (or factory) used to instantiate the model, e.g.
-        :class:`RandomForestClassifier`, :class:`XGBClassifier`.
-    model_params : dict
-        Keyword arguments passed to `model_class` when constructing
-        the model for each fold.
-    verbose : bool, default False
-        If True, print per-fold metric values.
-
-    Returns
-    -------
-    list of dict
-        A list of length K, where each element is a dict with keys
-        ``"accuracy"``, ``"precision"``, ``"recall"``, and ``"f1"``.
-    """
-    # ====================================
-    #               CONFIG
-    # ====================================
-    K_splits = 5
-    random_state = 1337
-    
     df = data.copy()
-    categorical_cols = df.select_dtypes(include=["object"]).columns
-    numerical_cols = df.select_dtypes(include=["number"]).columns
     train = df.drop(columns=["is_successful"])
     target = df["is_successful"]
-
-    # Ensure numerical columns are float64
-    train[numerical_cols] = train[numerical_cols].astype("float64")
 
     # ====================================
     #        CROSS-VALIDATION LOOP
     # ====================================
     fold_scores = []
-    sk_fold = StratifiedKFold(n_splits=K_splits, shuffle=True, random_state=random_state)
+    sk_fold = StratifiedKFold(n_splits=K_splits, shuffle=True, random_state=RANDOM_STATE)
     for i, (train_idx, test_idx) in enumerate(sk_fold.split(train, target)):
         if verbose:
             print(f"Fold {i+1}")
 
         X_train, X_test = train.iloc[train_idx], train.iloc[test_idx]
         y_train, y_test = target.iloc[train_idx], target.iloc[test_idx]
-
-        # APPLY PREPROCESSING
-        X_train, X_test = preprocess_data(X_train, X_test, categorical_cols, numerical_cols)
 
         # ====================================
         #         TRAIN AND EVALUTATE
@@ -289,34 +230,58 @@ def perform_CV(
             )
     return fold_scores
 
+def fit_model_on_full_train(
+        train_data: pd.DataFrame,
+        model_class,
+        model_params,
+        verbose = False
+    ):
+    X_train = train_data.drop(columns=["is_successful"])
+    y_train = train_data["is_successful"]
+
+    # TRAINING
+    model = model_class(**model_params)
+    model.fit(X_train, y_train)
+
+    if verbose:
+        print(f"Trained {model.__class__.__name__} on full training data.")
+
+    return model
+
+
+def perform_test_evaluation(
+        test_data: pd.DataFrame,
+        model,
+        verbose = True
+    ) -> dict[str, float]:
+    X_test = test_data.drop(columns = ['is_successful'])
+    y_test = test_data['is_successful']
+
+    y_pred = model.predict(X_test)
+    accuracy = accuracy_score(y_test, y_pred)
+    precision = precision_score(y_test, y_pred, zero_division=0)
+    recall = recall_score(y_test, y_pred, zero_division=0)
+    f1 = f1_score(y_test, y_pred, zero_division=0)
+    test_results = {
+        'accuracy': accuracy,
+        'precision': precision,
+        'recall': recall,
+        'f1': f1
+    }
+    if verbose:
+        print(
+            f"{model.__class__.__name__} test evaluation results: \n"
+            f"\taccuracy={accuracy:.4f}, \n"
+            f"\tprecision={precision:.4f}, \n"
+            f"\trecall={recall:.4f}, \n"
+            f"\tf1={f1:.4f}"
+        )
+    return test_results
+
 # ---------------------------------------------------------------
 #                        NAIVE BASELINE
 # ---------------------------------------------------------------
 def model_naive_baseline(data: pd.DataFrame, verbose = False):
-    """
-    Compute and save a majority-class baseline for `is_successful`.
-
-    The baseline predicts the most frequent class in the target for
-    every observation and reports the resulting metrics.
-
-    Parameters
-    ----------
-    data : pandas.DataFrame
-        Dataset including a boolean `is_successful` target column.
-    verbose : bool, default False
-        If True, print baseline accuracy, precision, recall, and F1.
-
-    Returns
-    -------
-    tuple of float
-        (accuracy, precision, recall, f1) for the majority-class baseline.
-
-    Side Effects
-    ------------
-    Writes a CSV file with one row containing the metrics to
-    ``./results/naive_baseline_results.csv``.
-    """
-
     target = data['is_successful']
     majority_class = target.value_counts().sort_values(ascending = False).keys()[0]
     predictions = np.full_like(target, majority_class)
@@ -327,10 +292,10 @@ def model_naive_baseline(data: pd.DataFrame, verbose = False):
     f1 = f1_score(target, predictions)
     
     if verbose:
-        print(f"\tMajority class baseline accuracy: {accuracy:.4f}")
-        print(f"\tMajority class baseline precision: {precision:.4f}")
-        print(f"\tMajority class baseline recall: {recall:.4f}")
-        print(f"\tMajority class baseline f1: {f1:.4f}")
+        print(f"\tMajority class baseline model accuracy: {accuracy:.4f}")
+        print(f"\tMajority class baseline model precision: {precision:.4f}")
+        print(f"\tMajority class baseline model recall: {recall:.4f}")
+        print(f"\tMajority class baseline model f1: {f1:.4f}")
 
     naive_baseline_results = pd.DataFrame({
         'accuracy': [accuracy],
@@ -341,258 +306,69 @@ def model_naive_baseline(data: pd.DataFrame, verbose = False):
     path = Path("./results/naive_baseline_results.csv")
     naive_baseline_results.to_csv(path, index = False)
     print("\tSAVED NAIVE BASELINE RESULTS:", path)
-
     return accuracy, precision, recall, f1
 
-def evaluate_base_models(data: pd.DataFrame, verbose = False):
-    """
-    Train and evaluate untuned baseline models using cross-validation.
-
-    Models evaluated:
-    - Random Forest
-    - XGBoost
-    - Logistic Regression
-
-    For each model, this function:
-    - runs K-fold cross-validation via :func:`perform_CV`
-    - aggregates mean accuracy, precision, recall, and F1 across folds
-    - optionally prints the average metrics
-    - compares models based on mean F1 score
-
-    Parameters
-    ----------
-    data : pandas.DataFrame
-        Preprocessed dataset including an `is_successful` target column.
-    verbose : bool, default False
-        If True, print mean metrics for each model.
-
-    Returns
-    -------
-    None
-
-    Side Effects
-    ------------
-    Saves a CSV file with mean metrics per model to
-    ``./results/untuned_model_results.csv`` and prints the best model
-    according to F1 score.
-    """
-
-    def print_verbose(df, verbose):
-        if verbose:
-            for metric in ["accuracy", "precision", "recall", "f1"]:
-                print(f"\t{metric}: {df[metric].mean():.4f}")
-
+# ---------------------------------------------------------------
+#                  BASELINE MODEL EVALUATION
+# ---------------------------------------------------------------
+def evaluate_base_models(train: pd.DataFrame, test: pd.DataFrame):
     # ====================================
     #           RANDOM FOREST
     # ====================================
-    print("\tRANDOM FOREST...")
-    rf_fold_scores = perform_CV(
-        data = data,
+    rf_model = fit_model_on_full_train(
+        train_data = train,
         model_class = RandomForestClassifier,
-        model_params = {},
+        model_params = {}
+    )
+    rf_score = perform_test_evaluation(
+        test_data = test,
+        model = rf_model,
         verbose = False
     )
-    rf_results_df = pd.DataFrame(rf_fold_scores)
-    print_verbose(rf_results_df, verbose)
+
     # ====================================
     #               XGBOOST
     # ====================================
-    print("\tXGBOOST...")
-    xgb_fold_scores = perform_CV(
-        data = data,
+    xgb_model = fit_model_on_full_train(
+        train_data = train,
         model_class = XGBClassifier,
-        model_params = {},
+        model_params = {}
+    )
+    xgb_score = perform_test_evaluation(
+        test_data = test,
+        model = xgb_model,
         verbose = False
     )
-    xgb_results_df = pd.DataFrame(xgb_fold_scores)
-    print_verbose(xgb_results_df, verbose)
+
     # ====================================
     #         LOGISTIC REGRESSION
     # ====================================
-    print("\tLOGISTIC REGRESSION...")
-    lr_fold_scores = perform_CV(
-        data = data,
+    lr_model = fit_model_on_full_train(
+        train_data = train,
         model_class = LogisticRegression,
-        model_params = {'max_iter': 1000},
+        model_params = {"max_iter": 1000}
+    )
+    lr_score = perform_test_evaluation(
+        test_data = test,
+        model = lr_model,
         verbose = False
     )
-    lr_results_df = pd.DataFrame(lr_fold_scores)
-    print_verbose(lr_results_df, verbose)
 
     # Aggregating results for comparison
-    all_model_results = {
-        "Random Forest": rf_results_df.mean(),
-        "XGBoost": xgb_results_df.mean(),
-        "Logistic Regression": lr_results_df.mean()
-    }
-    all_model_results_df = pd.DataFrame(all_model_results)
+    all_model_results = [
+        rf_score,
+        xgb_score,
+        lr_score
+    ]
+    
+    all_model_results_df = pd.DataFrame(all_model_results, index = ["RandomForest", "XGBoost", "LogisticRegression"])
+    all_model_results_df.to_csv("./results/untuned_model_results.csv")
+    print("SAVED UNTUNED MODEL RESULTS: ./results/untuned_model_results.csv")
 
-    print(f"Best model based on F1 score: {all_model_results_df.loc['f1'].idxmax()} with F1 = {all_model_results_df.loc['f1'].max():.4f}")
-    path = Path("./results/untuned_model_results.csv")
-    all_model_results_df.to_csv(path)
-    print("\tSAVED UNTUNED MODEL RESULTS:", path)
-
-def perform_CV_xgb_ensemble(
-        data: pd.DataFrame,
-        verbose = False
-    ) -> list[dict[str, float]]:
-    """
-    Evaluate a per-category XGBoost ensemble using stratified K-fold CV.
-
-    For each fold:
-    - splits the data into train/test indices
-    - for each `cat_parent_name` value:
-        * loads tuned XGBoost hyperparameters for that category
-          from ``./results/optimization_trials/xgb_categorical/``.
-        * preprocesses the subset for that category using
-          :func:`preprocess_data`
-        * trains an XGBoost model and predicts on the category-specific
-          portion of the test fold
-    - combines all category predictions into a full test-fold prediction
-    - computes accuracy, precision, recall, and F1 for the ensemble.
-
-    Parameters
-    ----------
-    data : pandas.DataFrame
-        Preprocessed dataset including `is_successful` and
-        `cat_parent_name` columns.
-    verbose : bool, default False
-        If True, print metrics per fold.
-
-    Returns
-    -------
-    pandas.DataFrame
-        Single-row DataFrame containing mean accuracy, precision,
-        recall, and F1 across folds.
-
-    Side Effects
-    ------------
-    Saves the mean metrics to
-    ``./results/cat_xgb_ensemble_results.csv``.
-    """
-
-    # ====================================
-    #               CONFIG
-    # ====================================
-    K_splits = 5
-    random_state = 1337
-    # Same config as before for consistency, same splits
-
-    df = data.copy()
-    categorical_cols = df.select_dtypes(include=["object"]).columns
-    numerical_cols = df.select_dtypes(include=["number"]).columns
-    train = df.drop(columns=["is_successful"])
-    target = df["is_successful"]
-
-    train[numerical_cols] = train[numerical_cols].astype("float64")
-
-    # ====================================
-    #        CROSS-VALIDATION LOOP
-    # ====================================
-    fold_scores = []
-    skf = StratifiedKFold(n_splits=K_splits, shuffle=True, random_state=random_state)
-    for i, (train_idx, test_idx) in enumerate(skf.split(train, target)):
-        if verbose:
-            print(f"\nFold {i+1}")
-
-        X_train, X_test = train.iloc[train_idx], train.iloc[test_idx]
-        y_train, y_test = target.iloc[train_idx], target.iloc[test_idx]
-
-        # container for predictions on the full test fold
-        y_pred_full = pd.Series(index=X_test.index, dtype=int)
-        
-        # ====================================
-        #           TRAIN AND EVALUTATE (ONE PER CATEGORY PARENT)
-        # ====================================
-        for cat_parent_name in data['cat_parent_name'].unique():
-            # get data for this category
-            train_mask = (X_train['cat_parent_name'] == cat_parent_name)
-            test_mask = (X_test['cat_parent_name'] == cat_parent_name)
-            X_train_cat = X_train[train_mask]
-            y_train_cat = y_train[train_mask]
-            X_test_cat = X_test[test_mask]
-            # y_test_cat = y_test[test_mask]
-
-            # get best params:
-            best_params_df = pd.read_csv(f"./results/optimization_trials/xgb_categorical/optuna_{cat_parent_name}_xgb_trials.csv")
-            best_trial = best_params_df.loc[best_params_df['value'].idxmax()]
-            best_params = {
-                'n_estimators': int(best_trial['params_n_estimators']),
-                'max_depth': int(best_trial['params_max_depth']),
-                'learning_rate': float(best_trial['params_learning_rate']),
-                'gamma': float(best_trial['params_gamma']),
-                'eval_metric': 'logloss',
-            }
-
-            # preprocess per category (fit on cat-train, apply to cat-test)
-            X_train_proc, X_test_proc = preprocess_data(
-                X_train_cat,
-                X_test_cat,
-                categorical_cols=categorical_cols,
-                numerical_cols=numerical_cols,
-            )
-
-            model = XGBClassifier(**best_params)
-            model.fit(X_train_proc, y_train_cat)
-
-            y_pred_cat = model.predict(X_test_proc)
-
-            # write predictions back into the global y_pred_full
-            y_pred_full.loc[test_mask] = y_pred_cat
-
-        # Now evaluate ensemble on this fold
-        y_true_fold = y_test
-        y_pred_fold = y_pred_full
-
-        fold_result = {
-            "accuracy": accuracy_score(y_true_fold, y_pred_fold),
-            "precision": precision_score(y_true_fold, y_pred_fold, zero_division=0),
-            "recall": recall_score(y_true_fold, y_pred_fold, zero_division=0),
-            "f1": f1_score(y_true_fold, y_pred_fold, zero_division=0),
-        }
-        fold_scores.append(fold_result)
-
-        if verbose:
-            print(
-                f"\taccuracy={fold_result['accuracy']:.4f}, \n"
-                f"\tprecision={fold_result['precision']:.4f}, \n"
-                f"\trecall={fold_result['recall']:.4f}, \n"
-                f"\tf1={fold_result['f1']:.4f}"
-            )
-
-    ensemble_scores_df = pd.DataFrame(pd.DataFrame(fold_scores).mean()).T
-    path = Path("./results/cat_xgb_ensemble_results.csv")
-    ensemble_scores_df.to_csv(path, index=False)
-    print("\tSAVED ENSEMBLE RESULTS TO", path)
-
-    return ensemble_scores_df
-
-def perform_final_xgb_evaluation(data: pd.DataFrame):
-    """
-    Evaluate the globally tuned XGBoost model using cross-validation.
-
-    This function:
-    - loads the best global XGBoost hyperparameters from
-      ``./results/optimization_trials/optuna_xgb_trials.csv``
-    - runs stratified K-fold CV via :func:`perform_CV`
-    - aggregates mean accuracy, precision, recall, and F1 over folds.
-
-    Parameters
-    ----------
-    data : pandas.DataFrame
-        Preprocessed dataset including an `is_successful` target column.
-
-    Returns
-    -------
-    pandas.DataFrame
-        Single-row DataFrame with mean accuracy, precision, recall,
-        and F1 across folds.
-
-    Side Effects
-    ------------
-    Saves the mean metrics to ``./results/xgb_results.csv``.
-    """
-
+# ---------------------------------------------------------------
+#                   AFTER OPTIMIZATION FUNCTIONS
+# ---------------------------------------------------------------
+def get_best_model_params():
     xgb_best_params_df = pd.read_csv("./results/optimization_trials/optuna_xgb_trials.csv")
     best_trial = xgb_best_params_df.loc[xgb_best_params_df['value'].idxmax()]
     best_xgb_params = {
@@ -602,138 +378,103 @@ def perform_final_xgb_evaluation(data: pd.DataFrame):
         'gamma': float(best_trial['params_gamma']),
         'eval_metric': 'logloss',
     }
+    return best_xgb_params
 
-    fold_scores = perform_CV(data, XGBClassifier, best_xgb_params, verbose=False)
-    xgb_scores_df = pd.DataFrame(pd.DataFrame(fold_scores).mean()).T
+def perform_test_eval_on_cat_slices(test_data: pd.DataFrame, model, categories: list[str]):
+    X_test = test_data.drop(columns = ['is_successful'])
+    y_test = test_data['is_successful']
+    per_category_results = {}
+    for category in categories:
+        test_mask = (X_test[f'cat_parent_name__{category}'] == 1)
+        X_test_cat = X_test[test_mask]
+        y_pred_cat = model.predict(X_test_cat)
 
-    path = Path("./results/xgb_results.csv")
-    xgb_scores_df.to_csv(path, index=False)
-    print("\tSAVED FINAL XGB RESULTS TO", path)
+        accuracy = accuracy_score(y_test[test_mask], y_pred_cat)
+        precision = precision_score(y_test[test_mask], y_pred_cat, zero_division=0)
+        recall = recall_score(y_test[test_mask], y_pred_cat, zero_division=0)
+        f1 = f1_score(y_test[test_mask], y_pred_cat, zero_division=0)
+        per_category_results[category] = {
+            'accuracy': accuracy,
+            'precision': precision,
+            'recall': recall,
+            'f1': f1
+        }
+    return per_category_results
 
-    return xgb_scores_df
+def retrain_best_category_models(train: pd.DataFrame, categories):
+    trained_models = {}
 
-def evaluate_categorical_xgb_models(data: pd.DataFrame):
-    """
-    Evaluate tuned per-category XGBoost models on their own subsets.
-
-    For each unique `cat_parent_name`:
-    - loads tuned XGBoost hyperparameters for that category from
-      ``./results/optimization_trials/xgb_categorical/``
-    - restricts `data` to that category only
-    - runs stratified K-fold CV via :func:`perform_CV`
-    - computes mean accuracy, precision, recall, and F1.
-
-    Parameters
-    ----------
-    data : pandas.DataFrame
-        Preprocessed dataset including `is_successful` and
-        `cat_parent_name` columns.
-
-    Returns
-    -------
-    pandas.DataFrame
-        DataFrame indexed by `cat_parent_name`, with columns
-        ``mean_accuracy``, ``mean_precision``, ``mean_recall``,
-        and ``mean_f1``.
-
-    Side Effects
-    ------------
-    Saves the per-category metrics to
-    ``./results/cat_xgb_individual_results.csv``.
-    """
-    mean_scores = {}
-    for cat_parent_name in data['cat_parent_name'].unique():
-        # get best params:
-        best_params_df = pd.read_csv(f"./results/optimization_trials/xgb_categorical/optuna_{cat_parent_name}_xgb_trials.csv")
-        # Get best trial parameters:
+    for category in categories:
+        best_params_df = pd.read_csv(f"./results/optimization_trials/xgb_categorical/optuna_{category}_xgb_trials.csv")
         best_trial = best_params_df.loc[best_params_df['value'].idxmax()]
-        best_xgb_params = {
+        best_params = {
             'n_estimators': int(best_trial['params_n_estimators']),
             'max_depth': int(best_trial['params_max_depth']),
             'learning_rate': float(best_trial['params_learning_rate']),
             'gamma': float(best_trial['params_gamma']),
             'eval_metric': 'logloss',
         }
-        fold_scores = perform_CV(
-            data=data[data['cat_parent_name'] == cat_parent_name],
-            model_class=XGBClassifier,
-            model_params=best_xgb_params,
-            verbose=False,
+
+        train_slice = train[train[f'cat_parent_name__{category}'] == 1]
+        fit_model = fit_model_on_full_train(
+            train_data = train_slice,
+            model_class = XGBClassifier,
+            model_params = best_params,
+            verbose = False,
         )
-        mean_scores[cat_parent_name] = {
-            "mean_accuracy": np.mean([fold["accuracy"] for fold in fold_scores]),
-            "mean_precision": np.mean([fold["precision"] for fold in fold_scores]),
-            "mean_recall": np.mean([fold["recall"] for fold in fold_scores]),
-            "mean_f1": np.mean([fold["f1"] for fold in fold_scores]),
+        trained_models[category] = fit_model
+    return trained_models
+
+def perform_test_evaluation_ensemble(
+        test_data: pd.DataFrame,
+        trained_models: dict[str, XGBClassifier],
+        verbose = True
+    ) -> dict[str, float]:
+    X_test = test_data.drop(columns = ['is_successful'])
+    y_test = test_data['is_successful']
+
+    per_category_results = {}
+    y_pred_full = pd.Series(index=X_test.index, dtype=int)
+    for cat_parent_name, model in trained_models.items():
+        # get data for this category
+        test_mask = (X_test[f'cat_parent_name__{cat_parent_name}'] == 1)
+        X_test_cat = X_test[test_mask]
+        y_pred_cat = model.predict(X_test_cat)
+
+        # write predictions back into the global y_pred_full
+        y_pred_full.loc[test_mask] = y_pred_cat
+
+        # And also do per-category evaluations
+        accuracy = accuracy_score(y_test[test_mask], y_pred_cat)
+        precision = precision_score(y_test[test_mask], y_pred_cat, zero_division=0)
+        recall = recall_score(y_test[test_mask], y_pred_cat, zero_division=0)
+        f1 = f1_score(y_test[test_mask], y_pred_cat, zero_division=0)
+        per_category_results[cat_parent_name] = {
+            'accuracy': accuracy,
+            'precision': precision,
+            'recall': recall,
+            'f1': f1
         }
-    mean_scores_df = pd.DataFrame.from_dict(mean_scores, orient='index')
-    path = Path("./results/cat_xgb_individual_results.csv")
-    mean_scores_df.to_csv(path)
-    print("\tSAVED CATEGORICAL XGB INDIVIDUAL CATEGORY RESULTS TO", path)
-    return mean_scores_df
 
-def evaluate_global_xgb_on_categorical_subsets(data: pd.DataFrame):
-    """
-    Evaluate the globally tuned XGBoost model on each category subset.
-
-    This function:
-    - loads the best global XGBoost hyperparameters from
-      ``./results/optimization_trials/optuna_xgb_trials.csv``
-    - for each unique `cat_parent_name`, restricts the data to that
-      subset and runs :func:`perform_CV`
-    - aggregates mean accuracy, precision, recall, and F1 for each subset.
-
-    Parameters
-    ----------
-    data : pandas.DataFrame
-        Preprocessed dataset including `is_successful` and
-        `cat_parent_name` columns.
-
-    Returns
-    -------
-    pandas.DataFrame
-        DataFrame indexed by `cat_parent_name`, with columns
-        ``mean_accuracy``, ``mean_precision``, ``mean_recall``,
-        and ``mean_f1``.
-
-    Side Effects
-    ------------
-    Saves the per-category metrics to
-    ``./results/xgb_individual_results.csv``.
-    """
-    mean_scores = {}
-
-    optuna_xgb_trials = pd.read_csv("./results/optimization_trials/optuna_xgb_trials.csv")
-    best_trial = optuna_xgb_trials.loc[optuna_xgb_trials['value'].idxmax()]
-    best_xgb_params = {
-        'n_estimators': int(best_trial['params_n_estimators']),
-        'max_depth': int(best_trial['params_max_depth']),
-        'learning_rate': float(best_trial['params_learning_rate']),
-        'gamma': float(best_trial['params_gamma']),
-        'eval_metric': 'logloss',
+    accuracy = accuracy_score(y_test, y_pred_full)
+    precision = precision_score(y_test, y_pred_full, zero_division=0)
+    recall = recall_score(y_test, y_pred_full, zero_division=0)
+    f1 = f1_score(y_test, y_pred_full, zero_division=0)
+    test_results = {
+        'accuracy': accuracy,
+        'precision': precision,
+        'recall': recall,
+        'f1': f1
     }
-
-    # Use perform_CV on categorical subsets using best params
-    for cat_parent_name in data['cat_parent_name'].unique():
-        # print(f"Evaluating best XGB model for category: {cat_parent_name}")
-        fold_scores = perform_CV(
-            data=data[data['cat_parent_name'] == cat_parent_name],
-            model_class=XGBClassifier,
-            model_params=best_xgb_params,
-            verbose=False,
+    if verbose:
+        print(
+            f"XGB ensemble overall test evaluation results: \n"
+            f"\taccuracy={accuracy:.4f}, \n"
+            f"\tprecision={precision:.4f}, \n"
+            f"\trecall={recall:.4f}, \n"
+            f"\tf1={f1:.4f}"
         )
-        mean_scores[cat_parent_name] = {
-            "mean_accuracy": np.mean([fold["accuracy"] for fold in fold_scores]),
-            "mean_precision": np.mean([fold["precision"] for fold in fold_scores]),
-            "mean_recall": np.mean([fold["recall"] for fold in fold_scores]),
-            "mean_f1": np.mean([fold["f1"] for fold in fold_scores]),
-        }
-    mean_scores_df = pd.DataFrame.from_dict(mean_scores, orient='index')
-    path = Path("./results/xgb_individual_results.csv")
-    mean_scores_df.to_csv(path)
-    print("\tSAVED GLOBAL XGB INDIVIDUAL CATEGORY RESULTS TO", path)
-
-    return mean_scores_df
+    return test_results, per_category_results
 
 # ===============================================================
 #                             MAIN
@@ -762,12 +503,17 @@ def main_default():
 
     print("APPLYING FINAL MACHINE READY PREPROCESSING...")
     kick_transformed = machine_ready_preprocessing(kick_clean)
+    kick_train, kick_test = train_test_split(kick_transformed, test_size = 0.2, random_state = RANDOM_STATE)
+
+    categorical_cols = kick_transformed.select_dtypes(include=["object"]).columns
+    numerical_cols = kick_transformed.select_dtypes(include=["number"]).columns
+    kick_train, kick_test = preprocess_data(kick_train, kick_test, categorical_cols, numerical_cols)
 
     print("EVALUATING BASELINE NAIVE MODEL...")
-    _, _, _, _ = model_naive_baseline(kick_transformed, verbose=True)
+    _, _, _, _ = model_naive_baseline(kick_test, verbose=True)
 
-    print("TRAINING AND EVALUATING MODELS:")
-    evaluate_base_models(kick_transformed, verbose=True)
+    print("TRAINING AND EVALUATING UNTUNED MODELS:")
+    evaluate_base_models(kick_train, kick_test)
 
 def evaluate_optimized():
     """
@@ -777,14 +523,10 @@ def evaluate_optimized():
     -----
     1. Load processed Kickstarter data via :func:`load_processed_data`.
     2. Apply final preprocessing via :func:`machine_ready_preprocessing`.
-    3. Evaluate the globally tuned XGBoost model via
-       :func:`perform_final_xgb_evaluation`.
-    4. Evaluate the tuned per-category XGBoost ensemble via
-       :func:`perform_CV_xgb_ensemble`.
-    5. Evaluate the globally tuned XGBoost model on each category subset
-       via :func:`evaluate_global_xgb_on_categorical_subsets`.
-    6. Evaluate tuned per-category XGBoost models on their own subsets via
-       :func:`evaluate_categorical_xgb_models`.
+    3. Evaluate the globally tuned XGBoost model
+    4. Evaluate the globally tuned XGBoost model on each category subset
+    5. Evaluate the tuned per-category XGBoost ensemble
+    6. Evaluate tuned per-category XGBoost models on their own subsets
 
     Side Effects
     ------------
@@ -796,23 +538,51 @@ def evaluate_optimized():
 
     print("APPLYING FINAL MACHINE READY PREPROCESSING...")
     kick_transformed = machine_ready_preprocessing(kick_clean)
+    kick_train, kick_test = train_test_split(kick_transformed, test_size = 0.2, random_state = RANDOM_STATE)
 
-    print("EVALUATING OPTIMIZED MODELS:")
+    categorical_cols = kick_transformed.select_dtypes(include=["object"]).columns
+    numerical_cols = kick_transformed.select_dtypes(include=["number"]).columns
+    kick_train, kick_test = preprocess_data(kick_train, kick_test, categorical_cols, numerical_cols)
+
     print("EVALUATING FINAL TUNED XGB MODEL:")
-    perform_final_xgb_evaluation(kick_transformed)
+    best_params = get_best_model_params()
+    best_model = fit_model_on_full_train(
+        train_data = kick_train,
+        model_class = XGBClassifier,
+        model_params = best_params,
+        verbose = False
+    )
+    xgb_score = perform_test_evaluation(
+        test_data = kick_test,
+        model = best_model,
+        verbose = False
+    )
+    xgb_scores_df = pd.DataFrame([xgb_score], index = ['Tuned XGBoost'])
+    xgb_scores_df.to_csv("./results/xgb_results.csv")
+    print("SAVED XGB RESULTS TO ./results/xgb_results.csv")
+
+    xgb_score_per_cat = perform_test_eval_on_cat_slices(kick_test, best_model, kick_transformed['cat_parent_name'].unique())
+    xgb_score_per_cat_df = pd.DataFrame.from_dict(xgb_score_per_cat, orient='index')
+    xgb_score_per_cat_df.to_csv("./results/xgb_category_results.csv")
+    print("SAVED XGB PER-CATEGORY RESULTS TO ./results/xgb_category_results.csv")
 
     print("EVALUATING TUNED CATEGORICAL ENSEMBLE MODEL:")
-    perform_CV_xgb_ensemble(kick_transformed, verbose = False)
+    cat_xgb_models = retrain_best_category_models(kick_train, kick_transformed['cat_parent_name'].unique())
+    cat_xgb_ensemble_test_results, cat_xgb_ensemble_per_category_results = perform_test_evaluation_ensemble(
+        test_data = kick_test,
+        trained_models = cat_xgb_models,
+        verbose = False
+    )
+    cat_xgb_ensemble_test_results_df = pd.DataFrame([cat_xgb_ensemble_test_results], index = ['Categorical Tuned XGBoost Ensemble'])
+    cat_xgb_ensemble_test_results_df.to_csv("./results/cat_xgb_ensemble_results.csv")
+    print("SAVED CATEGORICAL XGB ENSEMBLE RESULTS TO ./results/cat_xgb_ensemble_results.csv")
 
-    print("EVALUTING FINAL TUNED XGB MODEL ON CATEGORICAL SUBSETS:")
-    evaluate_global_xgb_on_categorical_subsets(kick_transformed)
-
-    print("EVALUATING TUNED CATEGORICAL ENSEMBLE MODEL ON CATEGORICAL SUBSETS:")
-    evaluate_categorical_xgb_models(kick_transformed)
+    cat_xgb_ensemble_per_category_results_df = pd.DataFrame.from_dict(cat_xgb_ensemble_per_category_results, orient='index')
+    cat_xgb_ensemble_per_category_results_df.to_csv("./results/cat_xgb_category_results.csv")
+    print("SAVED CATEGORICAL XGB ENSEMBLE PER-CATEGORY RESULTS TO ./results/cat_xgb_category_results.csv")
 
 if __name__ == '__main__':
     import sys
-
     # Map command names to functions
     commands = {
         "default": main_default,

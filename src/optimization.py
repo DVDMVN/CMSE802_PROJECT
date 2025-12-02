@@ -22,11 +22,7 @@ Date: 2025-11-17
 import pandas as pd
 import numpy as np
 
-from sklearn.model_selection import StratifiedKFold
-from sklearn.preprocessing import StandardScaler, OneHotEncoder, LabelEncoder
-from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.linear_model import LogisticRegression
 from xgboost import XGBClassifier
 
 from pathlib import Path
@@ -158,45 +154,12 @@ def perform_optuna_xgb_optimization(data: pd.DataFrame):
     df_xgb_cat = study_xgb.trials_dataframe()
     df_xgb_cat.to_csv("./results/optimization_trials/optuna_xgb_trials.csv", index=False)
 
-def perform_categorical_optuna_xgb_optimization(data: pd.DataFrame):
-    """
-    Run Optuna hyperparameter optimization for per-category XGBoost models.
-
-    For each unique value of `cat_parent_name` in `data`, this routine:
-    - defines an Optuna objective that:
-        * filters the data to the current category
-        * samples XGBoost hyperparameters
-          (`n_estimators`, `max_depth`, `learning_rate`, `gamma`)
-        * sets `eval_metric="logloss"` for XGBoost
-        * evaluates the model using stratified K-fold CV via
-          :func:`src.modeling.perform_CV`
-        * returns mean F1 score across folds
-    - runs a study with `direction="maximize"` over F1 and 100 trials
-    - prints the best F1 and hyperparameters for that category
-    - saves the full trial history for that category to CSV.
-
-    Parameters
-    ----------
-    data : pandas.DataFrame
-        Preprocessed dataset including `is_successful` and
-        `cat_parent_name` columns.
-
-    Returns
-    -------
-    None
-
-    Side Effects
-    ------------
-    - For each `cat_parent_name`, writes Optuna trials for the XGBoost
-      study to:
-      `./results/optimization_trials/xgb_categorical/optuna_{cat_parent_name}_xgb_trials.csv`
-    - Logs per-category best F1 and hyperparameters to stdout.
-    """
+def perform_categorical_optuna_xgb_optimization(train: pd.DataFrame, categories):
     optuna.logging.set_verbosity(optuna.logging.WARN)
 
     best_xgb_cat_results = []
-    for cat_parent_name in data['cat_parent_name'].unique():
-        print(f"Optimizing for category: {cat_parent_name}")
+    for category in categories:
+        print(f"Optimizing for category: {category}")
 
         def objective_cat(trial: optuna.Trial) -> float:
             model_params = {
@@ -208,7 +171,7 @@ def perform_categorical_optuna_xgb_optimization(data: pd.DataFrame):
             }
 
             fold_scores = perform_CV(
-                data=data[data['cat_parent_name'] == cat_parent_name],
+                data=train[train[f'cat_parent_name__{category}'] == 1],
                 model_class=XGBClassifier,
                 model_params=model_params,
                 verbose=False,
@@ -217,20 +180,20 @@ def perform_categorical_optuna_xgb_optimization(data: pd.DataFrame):
             mean_f1 = float(np.mean([fold["f1"] for fold in fold_scores]))
             return mean_f1
 
-        study_cat = optuna.create_study(direction="maximize", study_name=f"xgb_f1_{cat_parent_name}")
+        study_cat = optuna.create_study(direction="maximize", study_name=f"xgb_f1_{category}")
         study_cat.optimize(objective_cat, n_trials=100)
 
-        print(f"XGB best F1 for {cat_parent_name}:", study_cat.best_value)
-        print(f"XGB best params for {cat_parent_name}:", study_cat.best_params)
+        print(f"XGB best F1 for {category}:", study_cat.best_value)
+        print(f"XGB best params for {category}:", study_cat.best_params)
         best_xgb_cat_results.append({
-            "cat_parent_name": cat_parent_name,
+            "cat_parent_name": category,
             "best_f1": study_cat.best_value,
             "best_params": study_cat.best_params
         })
         
         # XGBoost study
         df_xgb_cat = study_cat.trials_dataframe()
-        df_xgb_cat.to_csv(f"./results/optimization_trials/xgb_categorical/optuna_{cat_parent_name}_xgb_trials.csv", index=False)
+        df_xgb_cat.to_csv(f"./results/optimization_trials/xgb_categorical/optuna_{category}_xgb_trials.csv", index=False)
 
 # ===============================================================
 #                             MAIN
